@@ -1,4 +1,4 @@
-gcloud functions deploy wmata-incidents \
+gcloud functions deploy mbta-alerts \
     --runtime="python39" \
     --trigger-topic="minutes.two" \
     --source="./" \

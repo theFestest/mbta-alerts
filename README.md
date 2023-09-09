@@ -1,7 +1,7 @@
 
-# WMATA Incidents Bot
+# MBTA Alerts Bot
 
-https://bsky.app/profile/wmata-incidents.bsky.social
+https://bsky.app/profile/mbta-alerts.bsky.social
 
 ## References
 
@@ -15,17 +15,19 @@ https://vercel.com/docs/concepts/functions/serverless-functions/runtimes/python#
 
 https://cloud.google.com/scheduler/docs/creating#begin
 
-https://developer.wmata.com/docs/services/54763641281d83086473f232/operations/54763641281d830c946a3d77?
-
-https://twitter.com/wmata
-
-https://twitter.com/metrorailinfo
-
-https://www.wmata.com/service/status/index.cfm#current-alerts
-
-https://wmata.com/initiatives/Open-Data-Hub/MetroPulse.cfm
-
 https://www.pythonmorsels.com/dedent/
+
+// MBTA related
+
+https://api-v3.mbta.com/portal
+
+https://api-v3.mbta.com/docs/swagger/index.html#/Alert
+
+https://www.mbta.com/developers/v3-api
+
+https://www.mbta.com/developers
+
+https://www.mbta.com/alerts/subway
 
 ## Demo
 
@@ -62,7 +64,7 @@ Your Python API is now available at `http://localhost:3000/api`.
     - use detectFacets ? https://github.com/susumuota/nanoatp
     - or just find start byte as "https://" and end byte as first whitespace after url? (might be too naive)
 
-- Support reposting long standing incidents (such as Green line currently) once a day or so.
+- Support reposting long standing incidents (such as WMATA Green line currently) once a day or so.
     - perhaps: if incident is older than 24 hours and time is within 1 interval of 8 am or 4 pm (commuting hours)?
 
 - Let manual posts not interfere with running (tag specifically bot posts, or pull more posts if the latest doesn't contain the time)

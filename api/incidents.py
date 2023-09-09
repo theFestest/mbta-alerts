@@ -4,24 +4,83 @@ from typing import Union, Optional
 from textwrap import dedent
 
 import requests
-# from .vercel_kv import KV, KVConfig
-from datetime import datetime
+from datetime import datetime, timedelta
 from atproto import Client, models
 from nanoatp.richtext import detectLinks
 
 IS_DEPLOYED = os.getenv("IS_DEPLOYED")
-WMATA_API_KEY = os.getenv("WMATA_API_KEY")
+API_KEY = os.getenv("API_KEY")
 BOT_HANDLE = os.getenv("BOT_HANDLE")
 BOT_APP_PASSWORD = os.getenv("BOT_APP_PASSWORD")
 
-# Vercel KV related args for state keeping.
-VERCEL_KV_URL = os.getenv("VERCEL_KV_URL")
-VERCEL_KV_REST_API_URL = os.getenv("VERCEL_KV_REST_API_URL")
-VERCEL_KV_REST_API_TOKEN = os.getenv("VERCEL_KV_REST_API_TOKEN")
-VERCEL_KV_REST_API_READ_ONLY_TOKEN = os.getenv("VERCEL_KV_REST_API_READ_ONLY_TOKEN")
-
 at_client = None
-kv_client = None
+
+"""Example response body:
+{
+  "links": {
+    "self": "string",
+    "prev": "string",
+    "next": "string",
+    "last": "string",
+    "first": "string"
+  },
+  "data": [ // Data key is a list of active alerts
+    {
+      "type": "string",
+      "relationships": {
+        "facility": {
+          "links": {
+            "self": "string",
+            "related": "string"
+          },
+          "data": {
+            "type": "string",
+            "id": "string"
+          }
+        }
+      },
+      "links": {},
+      "id": "string",
+      "attributes": {
+        "url": "http://www.mbta.com/uploadedfiles/Documents/Schedules_and_Maps/Commuter_Rail/fairmount.pdf?led=6/3/2017%201:22:09%20AM",
+        "updated_at": "2017-08-14T14:54:01-04:00",
+        "timeframe": "Ongoing",
+        "short_header": "All weekend Fairmount Line trains will be bused between Morton St. & Readville due to construction of Blue Hill Ave Station.\n",
+        "severity": 10,
+        "service_effect": "Minor Route 216 delay",
+        "lifecycle": "Ongoing",
+        "informed_entity": [
+          {
+            "trip": "CR-Weekday-Spring-17-517",
+            "stop": "Auburndale",
+            "route_type": 2,
+            "route": "CR-Worcester",
+            "facility": "405",
+            "direction_id": 0,
+            "activities": [
+              "BOARD",
+              "EXIT"
+            ]
+          }
+        ],
+        "header": "Starting 6/3, all weekend Fairmount Line trains will be bused between Morton St. and Readville in both directions due to construction of the new Blue Hill Avenue Station.\n",
+        "effect_name": "Delay",
+        "effect": "ACCESS_ISSUE",
+        "description": "If entering the station, cross Tremont Street to the Boston Common and use Park Street Elevator 978 to the Green Line westbound platform. Red Line platform access is available via the elevator beyond the fare gates. If exiting the station, please travel down the Winter Street Concourse toward Downtown Crossing Station, exit through the fare gates, and take Downtown Crossing Elevator 892 to the street level.\n",
+        "created_at": "2017-08-14T14:54:01-04:00",
+        "cause": "ACCIDENT",
+        "banner": "All service suspended due to severe weather",
+        "active_period": [
+          {
+            "start": "2017-08-14T14:54:01-04:00",
+            "end": "2017-08-14T14:54:01-04:00"
+          }
+        ]
+      }
+    }
+  ]
+}
+"""
 
 
 def check_facets(facets: list):
@@ -73,7 +132,7 @@ def send_post(text: str):
     #     )
     # ]
     facets = detectLinks(text)
-    # NOTE: sometimes finds urls with bogus trailing dots (bc of WMATA info like "wmata.com.")
+    # NOTE: sometimes finds urls with bogus trailing dots (bc of data like "wmata.com.")
     print(f"Found rich text facets: {facets}")
     facets = check_facets(facets)
     print(f"Adjusted rich text facets: {facets}")
@@ -117,43 +176,21 @@ def is_newer(update_time: Union[str, datetime], last_posted: Optional[Union[str,
         return True  # TODO: is this a safe default or do we risk spamming?
     if not isinstance(update_time, datetime):
         update_time = datetime.fromisoformat(update_time)
+        # Remove timezone as we know it will be given in the same time zone as was posted.
+        update_time = update_time.replace(tzinfo=None)
     if not isinstance(last_posted, datetime):
         last_posted = datetime.fromisoformat(last_posted)
     return update_time > last_posted
 
 
-def get_train_incidents():
-    """Query WMATA for train incidents
+def get_alerts():
+    """Query MBTA for alerts
     """
     pass
-
-
-def get_bus_incidents():
-    """Query WMATA for bus incidents
-    """
-    pass
-
-
-def get_elevator_incidents() -> requests.Response:
-    """Query WMATA for elevator incidents
-    """
-    pass
-
-
-# def login_kv():
-#     global kv_client
-#     kv_client = KV(
-#         kv_config=KVConfig(
-#             url=VERCEL_KV_URL,
-#             rest_api_url=VERCEL_KV_REST_API_URL,
-#             rest_api_token=VERCEL_KV_REST_API_TOKEN,
-#             rest_api_read_only_token=VERCEL_KV_REST_API_READ_ONLY_TOKEN
-#         )
-#     )
 
 
 def get_latest_post_time():
-    """ Time corresponds to WMATA update time, not post time.
+    """ Time corresponds to alert update time, not post time.
     Example reponse:
     Response(
         feed=[
@@ -164,160 +201,115 @@ def get_latest_post_time():
         cursor='1690337092640::bafyreiezwte44vksso53ltnl5f7tkrlpnxeiqo3tukkjmmjlzeixth66xe'
     )
     """
-    if at_client is None:
-        at_login()
+    try:
+        if at_client is None:
+            at_login()
 
-    # Fetch feed of latest posts from this bot
-    feed_resp = at_client.bsky.feed.get_author_feed({"actor": BOT_HANDLE, "limit": 1})
-    print(f"Got feed response:\n{feed_resp}")
-    # Get post itself
-    latest_post = feed_resp.feed[0].post
-    # Get text from the post
-    post_text: str = latest_post.record.text
-    print(f"Got latest post with text:\n{post_text}")
-    # Get post by lines
-    post_lines = post_text.splitlines()
-    # Get update line: "Updated: 2023-07-25 20:10:19 (Eastern Time)."
-    update_line = post_lines[-1]
-    print(f"Post update line reads: {update_line}")
-    # Get timestamp from within this line: "2023-07-25 20:10:19"
-    time_string = update_line[update_line.find(": ")+len(": "): update_line.find("(")-len("(")]
-    # Convert to datetime object for comparisons
-    timestamp = datetime.fromisoformat(time_string)
+        # Fetch feed of latest posts from this bot
+        feed_resp = at_client.bsky.feed.get_author_feed({"actor": BOT_HANDLE, "limit": 1})
+        print(f"Got feed response:\n{feed_resp}")
+        # Get post itself
+        latest_post = feed_resp.feed[0].post
+        # Get text from the post
+        post_text: str = latest_post.record.text
+        print(f"Got latest post with text:\n{post_text}")
+        # Get post by lines
+        post_lines = post_text.splitlines()
+        # Get update line: "Updated: 2023-07-25 20:10:19 (Eastern Time)."
+        update_line = post_lines[-1]
+        print(f"Post update line reads: {update_line}")
+        # Get timestamp from within this line: "2023-07-25 20:10:19"
+        time_string = update_line[update_line.find(": ")+len(": "): update_line.find("(")-len("(")]
+        # Convert to datetime object for comparisons
+        timestamp = datetime.fromisoformat(time_string)
+    except:
+        print("Failed to login to collect latest posting time!")
+        # Default to most recent 24 hours
+        timestamp = datetime.now() - timedelta(hours=24)
 
     return timestamp
 
 
-def find_new_incidents(incident_list, latest_post: datetime):
-    """Collect new / updated incidents based on kv records
+def find_new_alerts(alert_list, latest_post: datetime):
+    """Collect new / updated alerts based on latest post records
     """
-    new_incidents = []
-    # if kv_client is None:
-    #     login_kv()
+    new_alerts = []
 
-    # Active incidents are listed in reverse chronological order, reverse for posting.
-    incident_list.reverse()
-    for incident in incident_list:
-        if is_newer(incident["DateUpdated"], latest_post):
-            print("Found new incident for processing...")
-            new_incidents.append(incident)
+    # Active alerts are listed in reverse chronological order, reverse for posting.
+    alert_list.reverse()
+    for alert in alert_list:
+        if is_newer(alert['attributes']["updated_at"], latest_post):
+            print("Found new alert for processing...")
+            new_alerts.append(alert)
         elif IS_DEPLOYED is None:
-            print("Appending old incident due to development config...")
-            new_incidents.append(incident)
+            print("Appending old alert due to development config...")
+            new_alerts.append(alert)
 
-    # TODO: remove if we're confident the previous method performs just as well.
-    # if kv_client.has_auth():
-    #     # Active incidents are listed in reverse chronological order, reverse for posting.
-    #     incident_list.reverse()
-    #     for incident in incident_list:
-    #         last_posted_update = kv_client.get(incident["IncidentID"])
-    #         # TODO: what happens if the key has never been used? returns '{"result":null}' i.e. None?
-    #         if is_newer(incident["DateUpdated"], last_posted_update):
-    #             new_incidents.append(incident)
-    #         elif IS_DEPLOYED is None:
-    #             print("Appending old post due to debug config")
-    #             new_incidents.append(incident)
-    # else:
-    #     print("Unable to access kv store to check incident history! Skipping to avoid post spam!")
-    return new_incidents
+    return new_alerts
 
+def make_alert_text(alert_dict: dict):
+    """Generate formatted post body for train alerts
+    Example data under .data.attributes
 
-# def update_last_posted(incident_id, date_updated):
-#     """Store last updated time for this incident id in kv.
-#     """
-#     if kv_client is None:
-#         login_kv()
+    "attributes": {
+        "url": "http://www.mbta.com/uploadedfiles/Documents/Schedules_and_Maps/Commuter_Rail/fairmount.pdf?led=6/3/2017%201:22:09%20AM",
+        "updated_at": "2017-08-14T14:54:01-04:00",
+        "timeframe": "Ongoing",
+        "short_header": "All weekend Fairmount Line trains will be bused between Morton St. & Readville due to construction of Blue Hill Ave Station.\n",
+        "severity": 10,
+        "service_effect": "Minor Route 216 delay",
+        "lifecycle": "Ongoing",
+        "informed_entity": [
+          {
+            "trip": "CR-Weekday-Spring-17-517",
+            "stop": "Auburndale",
+            "route_type": 2,
+            "route": "CR-Worcester",
+            "facility": "405",
+            "direction_id": 0,
+            "activities": [
+              "BOARD",
+              "EXIT"
+            ]
+          }
+        ],
+        "header": "Starting 6/3, all weekend Fairmount Line trains will be bused between Morton St. and Readville in both directions due to construction of the new Blue Hill Avenue Station.\n",
+        "effect_name": "Delay",
+        "effect": "ACCESS_ISSUE",
+        "description": "If entering the station, cross Tremont Street to the Boston Common and use Park Street Elevator 978 to the Green Line westbound platform. Red Line platform access is available via the elevator beyond the fare gates. If exiting the station, please travel down the Winter Street Concourse toward Downtown Crossing Station, exit through the fare gates, and take Downtown Crossing Elevator 892 to the street level.\n",
+        "created_at": "2017-08-14T14:54:01-04:00",
+        "cause": "ACCIDENT",
+        "banner": "All service suspended due to severe weather",
+        "active_period": [
+          {
+            "start": "2017-08-14T14:54:01-04:00",
+            "end": "2017-08-14T14:54:01-04:00"
+          }
+        ]
+      }
 
-#     if kv_client.has_auth():
-#         kv_client.set(incident_id, date_updated)
-#     else:
-#         print("Unable to access kv store to check incident history! Warning may post spam!")
-
-
-def make_train_incident_text(incident_dict: dict):
-    """Generate formatted post body for train incidents
-    Example response:
-    {
-        'Incidents': [{
-            'IncidentID': '7CC6238D-0BA9-4CED-B6B4-E769DEB07E67',
-            'Description': 'Expect residual delays to Vienna, Ashburn & Franconia due to an earlier switch problem at Smithsonian.',
-            // 'StartLocationFullName': None,
-            // 'EndLocationFullName': None,
-            // 'PassengerDelay': 0.0,
-            // 'DelaySeverity': None,
-            'IncidentType': 'Delay',
-            // 'EmergencyText': None,
-            'LinesAffected': 'BL; OR; SV;',
-            'DateUpdated': '2023-07-21T21:01:50'
-        }]
-    }
     """
-    def line_format(line_string):
-        lines = line_string.split(";")
-        cleaned_lines = [line.strip() for line in lines if line.strip() != ""]
-        return ", ".join(cleaned_lines)
-
-    return dedent(f"""
-Train incident reported for lines: {line_format(incident_dict['LinesAffected'])}.
-{incident_dict['IncidentType']}: {incident_dict['Description']}
-Updated: {datetime.fromisoformat(incident_dict['DateUpdated'])} (Eastern).
+    # TODO: try to include link as "More" hyper link? Or as a link on the heading?
+    # TODO: clearer presentation of data? less redudancy?
+    text = dedent(f"""
+{alert_dict['attributes']['service_effect']}:
+{alert_dict['attributes']['header']}
+Updated: {datetime.fromisoformat(alert_dict['attributes']['updated_at']).replace(tzinfo=None)} (Eastern).
 """).strip()
-
-
-def make_bus_incident_text(incident_dict: dict):
-    """Generate formatted post body for bus incidents
-    Example response:
-    {
-        'BusIncidents': [{
-            'IncidentID': '2973AF5D-F62B-416A-987C-7A5E597BDCDB',
-            'IncidentType': 'Alert',
-            'RoutesAffected': ['P12'],
-            'Description': 'Some P12 trips may be delayed due to operator availability. Check where your bus is at https://buseta.wmata.com/#P12',
-            'DateUpdated': '2023-07-21T21:06:59'
-        }]
-    }
-    """
-    return dedent(f"""
-Bus incident reported for routes: {','.join(incident_dict['RoutesAffected'])}.
-{incident_dict['IncidentType']}: {incident_dict['Description']}
-Updated: {datetime.fromisoformat(incident_dict['DateUpdated'])} (Eastern).
+    if len(text) > 300:
+        # Cut from end of header to get back down to length. Do -1 extra for '…' grapheme.
+        text = dedent(f"""
+{alert_dict['attributes']['service_effect']}:
+{alert_dict['attributes']['header'][:300-len(text)-1]}…
+Updated: {datetime.fromisoformat(alert_dict['attributes']['updated_at']).replace(tzinfo=None)} (Eastern).
 """).strip()
+    return text
 
-
-def make_elevator_incident_text(incident_dict: dict):
-    """Generate formatted post body for elevator incidents
-    Example response:
-    {
-        'ElevatorIncidents': [{
-            'UnitName': 'A01W02',
-            'UnitType': 'ESCALATOR',
-            // 'UnitStatus': None,
-            'StationCode': 'A01',
-            'StationName': 'Metro Center, G and 13th St Entrance',
-            'LocationDescription': 'Escalator between street and mezzanine',
-            // 'SymptomCode': None,
-            // 'TimeOutOfService': '0509',
-            'SymptomDescription': 'Modernization',
-            // 'DisplayOrder': 0.0,
-            'DateOutOfServ': '2023-05-05T05:09:00',
-            'DateUpdated': '2023-06-27T09:13:17',
-            'EstimatedReturnToService': '2023-09-04T23:59:59' // Somestimes is None TODO: add test for this
-        }]
-    }
-    """
-    def return_date(incident_dict: dict) -> str:
-        date = incident_dict['EstimatedReturnToService']
-        if date is not None:
-            return datetime.fromisoformat(date)
-        else:
-            return str(date)
-
-    return dedent(f"""
-Elevator incident reported at: {incident_dict['StationName']}.
-{incident_dict['SymptomDescription']}: {incident_dict['LocationDescription']}.
-Estimated return: {return_date(incident_dict)} (Eastern).
-Updated: {datetime.fromisoformat(incident_dict['DateUpdated'])} (Eastern).
-""").strip()
+#     return dedent(f"""
+# Train incident reported for lines: {line_format(alert_dict['LinesAffected'])}.
+# {alert_dict['IncidentType']}: {alert_dict['Description']}
+# Updated: {datetime.fromisoformat(alert_dict['updated_at'])} (Eastern).
+# """).strip()
 
 
 def main():
@@ -327,60 +319,42 @@ def main():
     print(f"Latest post was an update from {latest_update}")
 
     # Step 0: generate auth header
-    wmata_header = {"api_key": WMATA_API_KEY}
+    auth_header = {"api_key": API_KEY}
 
-    # Step 1: Check incidents
-    train_resp = requests.get(url="https://api.wmata.com/Incidents.svc/json/Incidents", headers=wmata_header)
-    bus_resp = requests.get(url="https://api.wmata.com/Incidents.svc/json/BusIncidents", headers=wmata_header)
-    elevator_resp = requests.get(url="https://api.wmata.com/Incidents.svc/json/ElevatorIncidents", headers=wmata_header)
+    # Step 1: Check alerts
+    alert_resp = requests.get(url="https://api-v3.mbta.com/alerts", headers=auth_header)
 
-    print("Got train incident response: ", train_resp.json())
-    print("Got bus incident response: ", bus_resp.json())
-    print("Got elevator incident response: ", elevator_resp.json())
+    print("Got alert response: ", alert_resp.json())
 
-    # Step 2: Collect relevant incidents (check latest_update for recency)
-    new_train = find_new_incidents(train_resp.json()['Incidents'], latest_update)
-    new_bus = find_new_incidents(bus_resp.json()['BusIncidents'], latest_update)
-    new_elevator = find_new_incidents(elevator_resp.json()['ElevatorIncidents'], latest_update)
+    # Step 2: Collect relevant alerts (check latest_update for recency)
+    new_alerts = find_new_alerts(alert_resp.json()['data'], latest_update)
 
-    print(f"Got {len(new_train)} new train incidents")
-    print(f"Got {len(new_bus)} new bus incidents")
-    print(f"Got {len(new_elevator)} elevator incidents")
+    print(f"Got {len(new_alerts)} new alerts")
 
-    # Step 3: Generate posts to send (post_text, incident_id, date_updated)
+    # Step 3: Generate posts to send (post_text, date_updated)
     to_send: list[(str, str, str)] = []
-    to_send.extend(
-        [(make_train_incident_text(incident), incident['IncidentID'], incident['DateUpdated']) for incident in new_train]
-        )
-    to_send.extend(
-        [(make_bus_incident_text(incident), incident['IncidentID'], incident['DateUpdated']) for incident in new_bus]
-        )
-    # to_send.extend(
-    #     [(make_elevator_incident_text(incident), '_', incident['DateUpdated']) for incident in new_elevator]
-    #     )
+    to_send.extend([(make_alert_text(alert), alert['attributes']['updated_at']) for alert in new_alerts])
 
-    # Step 4: Send posts and update last post time in kv.
+    # Step 4: Send posts and note latest post update time.
     posts = 0
     latest_post = None
     # Sort posts overall by the datetime of their update (newest last)
-    to_send.sort(key=lambda a: a[2])
+    to_send.sort(key=lambda a: a[1])
     for post_tuple in to_send:
         print()
         if IS_DEPLOYED is None:
             # Pause before posting during development
             breakpoint()
         if send_post(post_tuple[0]):
-            # Only update kv with posts that successfully sent in case of send error
-            # update_last_posted(post_tuple[1], post_tuple[2])
             posts += 1
-            latest_post = post_tuple[2]
+            latest_post = post_tuple[1]
         else:
             print("Post failed! Moving on...")
 
     # Will look this time up via atproto on next run.
     # Note: we post the most recent update last to uphold invarient.
     print(f"Lastest post was from timestamp: {latest_post}.")
-    print(f"Sent {posts} incident posts. Exiting...")
+    print(f"Sent {posts} alert posts. Exiting...")
 
 
 if __name__ == "__main__":
