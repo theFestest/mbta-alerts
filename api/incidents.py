@@ -8,10 +8,13 @@ from datetime import datetime, timedelta
 from atproto import Client, models
 from nanoatp.richtext import detectLinks
 
-IS_DEPLOYED = os.getenv("IS_DEPLOYED")
-API_KEY = os.getenv("API_KEY")
-BOT_HANDLE = os.getenv("BOT_HANDLE")
-BOT_APP_PASSWORD = os.getenv("BOT_APP_PASSWORD")
+MANUAL = os.getenv("MANUAL", "")
+IS_DEPLOYED = os.getenv("IS_DEPLOYED", "")
+API_KEY = os.getenv("API_KEY", "")
+BOT_HANDLE = os.getenv("BOT_HANDLE", "")
+BOT_APP_PASSWORD = os.getenv("BOT_APP_PASSWORD", "")
+
+MAX_POSTS_PER_RUN = 5
 
 at_client = None
 
@@ -86,13 +89,31 @@ at_client = None
 def check_facets(facets: list):
     """ Examples of offending facet:
     Incorrectly ends in period
-    [{'$type': 'app.bsky.richtext.facet', 'index': {'byteStart': 149, 'byteEnd': 178}, 'features': [{'$type': 'app.bsky.richtext.facet#link', 'uri': 'https://buseta.wmata.com/#36.'}]}]
+    [
+      {
+        '$type': 'app.bsky.richtext.facet',
+        'index': {'byteStart': 149, 'byteEnd': 178},
+        'features': [{'$type': 'app.bsky.richtext.facet#link', 'uri': 'https://buseta.wmata.com/#36.'}]
+      }
+    ]
 
     "Mt.Vernon" is not a valid uri but naively looks like one
-    [{'$type': 'app.bsky.richtext.facet', 'index': {'byteStart': 148, 'byteEnd': 157}, 'features': [{'$type': 'app.bsky.richtext.facet#link', 'uri': 'Mt.Vernon'}]}]
+    [
+      {
+        '$type': 'app.bsky.richtext.facet',
+        'index': {'byteStart': 148, 'byteEnd': 157},
+        'features': [{'$type': 'app.bsky.richtext.facet#link', 'uri': 'Mt.Vernon'}]
+      }
+    ]
     """
     fixed = []
     for facet in facets:
+        # if url lacks http:// or https://, manually include it
+        if facet['features'][0]['uri'].find("http://") == -1 and facet['features'][0]['uri'].find("https://") == -1:
+            print(f"Fixing facet for uri: {facet['features'][0]['uri']}")
+            facet['features'][0]['uri'] = f"https://{facet['features'][0]['uri']}"
+            print(f"Fixed uri: {facet['features'][0]['uri']}")
+            fixed.append(facet)
         # If url ends in a dot we accidentally matched a period
         if facet['features'][0]['uri'][-1] == '.':
             print(f"Fixing facet for uri: {facet['features'][0]['uri']}")
@@ -119,8 +140,10 @@ def send_post(text: str):
     return post_ref of generated post
     """
     print(f"Sending post with text:\n{text}")
-    if at_client is None:
+    if not isinstance(at_client, Client):
         at_login()
+        assert isinstance(at_client, Client)
+        assert at_client.me is not None
 
     # Make links clickable via rich text facets
     # Facet model structure:
@@ -138,7 +161,7 @@ def send_post(text: str):
     print(f"Adjusted rich text facets: {facets}")
 
     try:
-        if IS_DEPLOYED is not None:
+        if IS_DEPLOYED or MANUAL:
             # Only bother embedding facets if there's a url.
             if len(facets) == 0:
                 at_client.send_post(text=text)
@@ -167,7 +190,7 @@ def at_login():
     global at_client
     at_client = Client()
     profile = at_client.login(BOT_HANDLE, BOT_APP_PASSWORD)
-    print("Logged in as: ", profile.displayName)
+    print("Logged in as: ", profile.display_name)
 
 
 def is_newer(update_time: Union[str, datetime], last_posted: Optional[Union[str, datetime]]) -> bool:
@@ -202,11 +225,12 @@ def get_latest_post_time():
     )
     """
     try:
-        if at_client is None:
+        if not isinstance(at_client, Client):
             at_login()
+            assert isinstance(at_client, Client)
 
         # Fetch feed of latest posts from this bot
-        feed_resp = at_client.bsky.feed.get_author_feed({"actor": BOT_HANDLE, "limit": 1})
+        feed_resp = at_client.app.bsky.feed.get_author_feed({"actor": BOT_HANDLE, "limit": 1})
         print(f"Got feed response:\n{feed_resp}")
         # Get post itself
         latest_post = feed_resp.feed[0].post
@@ -222,7 +246,7 @@ def get_latest_post_time():
         time_string = update_line[update_line.find(": ")+len(": "): update_line.find("(")-len("(")]
         # Convert to datetime object for comparisons
         timestamp = datetime.fromisoformat(time_string)
-    except:
+    except Exception as ex:
         print("Failed to login to collect latest posting time!")
         # Default to most recent 24 hours
         timestamp = datetime.now() - timedelta(hours=24)
@@ -241,11 +265,12 @@ def find_new_alerts(alert_list, latest_post: datetime):
         if is_newer(alert['attributes']["updated_at"], latest_post):
             print("Found new alert for processing...")
             new_alerts.append(alert)
-        elif IS_DEPLOYED is None:
+        elif not IS_DEPLOYED and not MANUAL:
             print("Appending old alert due to development config...")
             new_alerts.append(alert)
 
     return new_alerts
+
 
 def make_alert_text(alert_dict: dict):
     """Generate formatted post body for train alerts
@@ -324,15 +349,16 @@ def main():
     # Step 1: Check alerts
     alert_resp = requests.get(url="https://api-v3.mbta.com/alerts", headers=auth_header)
 
-    print("Got alert response: ", alert_resp.json())
+    # print("Got alert response: ", alert_resp.json())
 
     # Step 2: Collect relevant alerts (check latest_update for recency)
     new_alerts = find_new_alerts(alert_resp.json()['data'], latest_update)
 
+    # TODO: handle delay alerts more cleanly to post less
     print(f"Got {len(new_alerts)} new alerts")
 
     # Step 3: Generate posts to send (post_text, date_updated)
-    to_send: list[(str, str, str)] = []
+    to_send: list[tuple[str, str]] = []
     to_send.extend([(make_alert_text(alert), alert['attributes']['updated_at']) for alert in new_alerts])
 
     # Step 4: Send posts and note latest post update time.
@@ -341,8 +367,10 @@ def main():
     # Sort posts overall by the datetime of their update (newest last)
     to_send.sort(key=lambda a: a[1])
     for post_tuple in to_send:
-        print()
-        if IS_DEPLOYED is None:
+        if posts >= MAX_POSTS_PER_RUN and (IS_DEPLOYED or MANUAL):
+            print(f"Sent {MAX_POSTS_PER_RUN} posts, stopping to avoid spamming. {len(to_send)-MAX_POSTS_PER_RUN} to go next time.")
+            break
+        if not IS_DEPLOYED or MANUAL:
             # Pause before posting during development
             breakpoint()
         if send_post(post_tuple[0]):

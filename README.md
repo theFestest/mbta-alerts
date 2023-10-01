@@ -17,6 +17,10 @@ https://cloud.google.com/scheduler/docs/creating#begin
 
 https://www.pythonmorsels.com/dedent/
 
+https://github.com/MarshalX/atproto/blob/main/examples/advanced_usage/send_rich_text.py
+
+https://github.com/susumuota/nanoatp
+
 // MBTA related
 
 https://api-v3.mbta.com/portal
@@ -43,6 +47,12 @@ vercel dev
 Your Python API is now available at `http://localhost:3000/api`.
 
 ## TODO:
+
+- fix post time zone
+
+- add posting limit
+
+- add dependency bot?
 
 - Increase frequency of checks (is 5 minutes enough? github actions doesn't keep to schedule well...)
 
