@@ -1,4 +1,3 @@
-import datetime
 import os
 from typing import Union, Optional
 from textwrap import dedent
@@ -109,7 +108,7 @@ def check_facets(facets: list):
     fixed = []
     for facet in facets:
         # if url lacks http:// or https://, manually include it
-        if facet['features'][0]['uri'].find("http://") == -1 and facet['features'][0]['uri'].find("https://") == -1:
+        if not facet['features'][0]['uri'].startswith("http://") and not facet['features'][0]['uri'].startswith("https://"):
             print(f"Fixing facet for uri: {facet['features'][0]['uri']}")
             facet['features'][0]['uri'] = f"https://{facet['features'][0]['uri']}"
             print(f"Fixed uri: {facet['features'][0]['uri']}")
@@ -172,7 +171,7 @@ def send_post(text: str):
                         repo=at_client.me.did,
                         collection=models.ids.AppBskyFeedPost,
                         record=models.AppBskyFeedPost.Main(
-                            createdAt=datetime.now().isoformat(), text=text, facets=facets
+                            createdAt=at_client.get_current_time_iso(), text=text, facets=facets
                         )
                     )
                 )
@@ -316,6 +315,7 @@ def make_alert_text(alert_dict: dict):
     """
     # TODO: try to include link as "More" hyper link? Or as a link on the heading?
     # TODO: clearer presentation of data? less redudancy?
+    # TODO: have a more generic way of trimming to length
     text = dedent(f"""
 {alert_dict['attributes']['service_effect']}:
 {alert_dict['attributes']['header']}
@@ -329,12 +329,6 @@ Updated: {datetime.fromisoformat(alert_dict['attributes']['updated_at']).replace
 Updated: {datetime.fromisoformat(alert_dict['attributes']['updated_at']).replace(tzinfo=None)} (Eastern).
 """).strip()
     return text
-
-#     return dedent(f"""
-# Train incident reported for lines: {line_format(alert_dict['LinesAffected'])}.
-# {alert_dict['IncidentType']}: {alert_dict['Description']}
-# Updated: {datetime.fromisoformat(alert_dict['updated_at'])} (Eastern).
-# """).strip()
 
 
 def main():

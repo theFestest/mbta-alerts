@@ -50,10 +50,6 @@ Your Python API is now available at `http://localhost:3000/api`.
 
 - fix post time zone
 
-- add posting limit
-
-- add dependency bot?
-
 - Increase frequency of checks (is 5 minutes enough? github actions doesn't keep to schedule well...)
 
 - Enable elevator incidents
