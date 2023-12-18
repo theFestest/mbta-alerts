@@ -1,5 +1,5 @@
 functions-framework==3.*
-atproto==0.0.31
+atproto==0.0.34
 nanoatp==0.4.1
 requests==2.31.0
 python-dotenv==1.0.0
