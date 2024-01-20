@@ -229,7 +229,7 @@ def get_latest_post_time():
             assert isinstance(at_client, Client)
 
         # Fetch feed of latest posts from this bot
-        feed_resp = at_client.app.bsky.feed.get_author_feed({"actor": BOT_HANDLE, "limit": 1})
+        feed_resp = at_client.get_author_feed(actor=BOT_HANDLE, limit=1)
         print(f"Got feed response:\n{feed_resp}")
         # Get post itself
         latest_post = feed_resp.feed[0].post
